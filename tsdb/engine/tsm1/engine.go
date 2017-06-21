@@ -621,13 +621,42 @@ func (e *Engine) Backup(w io.Writer, basePath string, since time.Time) error {
 	// Filter paths to only changed files.
 	var filtered []string
 	for _, file := range files {
-		fi, err := os.Stat(filepath.Join(path, file))
-		if err != nil {
-			return err
-		} else if !fi.ModTime().After(since) {
+		if !strings.HasSuffix(file, ".tsm") {
 			continue
 		}
+
+		var skip bool
+		var tombstonePath string
+		f, err := os.Open(filepath.Join(path, file))
+		if err != nil {
+			return err
+		}
+		r, err := NewTSMReader(f)
+		if err != nil {
+			return err
+		}
+
+		// Grab the tombstone file if one exists.
+		if r.HasTombstones() {
+			tombstonePath = filepath.Base(r.TombstoneFiles()[0].Path)
+		}
+
+		// Skip this file since it doesn't contain data after cutoff
+		min, max := r.TimeRange()
+		if min < since.UnixNano() && max < since.UnixNano() {
+			skip = true
+		}
+
+		r.Close()
+
+		if skip {
+			continue
+		}
+
 		filtered = append(filtered, file)
+		if tombstonePath != "" {
+			filtered = append(filtered, tombstonePath)
+		}
 	}
 	if len(filtered) == 0 {
 		return nil
