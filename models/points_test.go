@@ -2371,8 +2371,3 @@ func BenchmarkEscapeString_QuotesAndBackslashes(b *testing.B) {
 		sink = [...]string{models.EscapeStringField(s1), models.EscapeStringField(s2)}
 	}
 }
-
-func init() {
-	// Force uint support to be enabled for testing.
-	models.EnableUintSupport()
-}

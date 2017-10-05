@@ -8939,8 +8939,3 @@ func TestServer_NestedAggregateWithMathPanics(t *testing.T) {
 		})
 	}
 }
-
-func init() {
-	// Force uint support to be enabled for testing.
-	models.EnableUintSupport()
-}
