@@ -61,6 +61,19 @@ var (
 	planningTimer              = metrics.MustRegisterTimer("planning_time", metrics.WithGroup(tsmGroup))
 )
 
+// NewContextWithMetricsGroup creates a new context with a tsm1 metrics.Group for tracking
+// various metrics when accessing TSM data.
+func NewContextWithMetricsGroup(ctx context.Context) context.Context {
+	group := metrics.NewGroup(tsmGroup)
+	return metrics.NewContextWithGroup(ctx, group)
+}
+
+// MetricsGroupFromContext returns the tsm1 metrics.Group associated with the context
+// or nil if no group has been assigned.
+func MetricsGroupFromContext(ctx context.Context) *metrics.Group {
+	return metrics.GroupFromContext(ctx)
+}
+
 const (
 	// keyFieldSeparator separates the series key from the field name in the composite key
 	// that identifies a specific field in series
@@ -646,9 +659,9 @@ func (e *Engine) LoadMetadataIndex(shardID uint64, index tsdb.Index) error {
 	}
 
 	if err := e.FileStore.WalkKeys(nil, func(key []byte, typ byte) error {
-		fieldType, err := tsmFieldTypeToInfluxQLDataType(typ)
-		if err != nil {
-			return err
+		fieldType := BlockTypeToInfluxQLDataType(typ)
+		if fieldType == influxql.Unknown {
+			return fmt.Errorf("unknown block type: %v", typ)
 		}
 
 		if err := e.addToIndexFromKey(key, fieldType); err != nil {
@@ -871,9 +884,9 @@ func (e *Engine) overlay(r io.Reader, basePath string, asNew bool) error {
 	// lock contention on the index.
 	merged := merge(readers...)
 	for v := range merged {
-		fieldType, err := tsmFieldTypeToInfluxQLDataType(v.typ)
-		if err != nil {
-			return err
+		fieldType := BlockTypeToInfluxQLDataType(v.typ)
+		if fieldType == influxql.Unknown {
+			return fmt.Errorf("unknown block type: %v", v.typ)
 		}
 
 		if err := e.addToIndexFromKey(v.key, fieldType); err != nil {
@@ -945,10 +958,7 @@ func (e *Engine) addToIndexFromKey(key []byte, fieldType influxql.DataType) erro
 
 	// Build in-memory index, if necessary.
 	if e.index.Type() == inmem.IndexName {
-		tags, _ := models.ParseTags(seriesKey)
-		if err := e.index.InitializeSeries(seriesKey, name, tags); err != nil {
-			return err
-		}
+		e.index.InitializeSeries(seriesKey, name)
 	}
 
 	return nil
@@ -2525,21 +2535,22 @@ func SeriesFieldKeyBytes(seriesKey, field string) []byte {
 	return b
 }
 
-func tsmFieldTypeToInfluxQLDataType(typ byte) (influxql.DataType, error) {
-	switch typ {
-	case BlockFloat64:
-		return influxql.Float, nil
-	case BlockInteger:
-		return influxql.Integer, nil
-	case BlockUnsigned:
-		return influxql.Unsigned, nil
-	case BlockBoolean:
-		return influxql.Boolean, nil
-	case BlockString:
-		return influxql.String, nil
-	default:
-		return influxql.Unknown, fmt.Errorf("unknown block type: %v", typ)
+var (
+	blockToFieldType = []influxql.DataType{
+		BlockFloat64:  influxql.Float,
+		BlockInteger:  influxql.Integer,
+		BlockBoolean:  influxql.Boolean,
+		BlockString:   influxql.String,
+		BlockUnsigned: influxql.Unsigned,
 	}
+)
+
+func BlockTypeToInfluxQLDataType(typ byte) influxql.DataType {
+	if int(typ) < len(blockToFieldType) {
+		return blockToFieldType[typ]
+	}
+
+	return influxql.Unknown
 }
 
 // SeriesAndFieldFromCompositeKey returns the series key and the field key extracted from the composite key.
