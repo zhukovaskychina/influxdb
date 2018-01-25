@@ -175,6 +175,14 @@ func NewHandler(c Config) *Handler {
 			"prometheus-metrics",
 			"GET", "/metrics", false, true, promhttp.Handler().ServeHTTP,
 		},
+		Route{
+			"files",
+			"POST", "/image", false, true, h.serveImage,
+		},
+		Route{
+			"files",
+			"GET", "/image", false, true, h.serveImage,
+		},
 	}...)
 
 	return h
