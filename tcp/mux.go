@@ -2,12 +2,15 @@
 package tcp // import "github.com/influxdata/influxdb/tcp"
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -187,11 +190,33 @@ func (mux *Mux) release(ln *listener) bool {
 
 	for b, l := range mux.m {
 		if l == ln {
+			DumpStack()
 			delete(mux.m, b)
 			return true
 		}
 	}
 	return false
+}
+
+func DumpStack() {
+	buf := make([]byte, 4096)
+
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			break
+		}
+		buf = make([]byte, len(buf)*2)
+	}
+
+	f, err := ioutil.TempFile(os.TempDir(), "tcp-mux-trace")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	io.Copy(f, bytes.NewReader(buf))
+	f.Sync()
 }
 
 // DefaultListener will return a net.Listener that will pass-through any
