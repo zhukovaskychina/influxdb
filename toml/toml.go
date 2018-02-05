@@ -2,8 +2,10 @@
 package toml // import "github.com/influxdata/influxdb/toml"
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"os/user"
 	"strconv"
 	"time"
 	"unicode"
@@ -88,4 +90,52 @@ func (s *Size) UnmarshalText(text []byte) error {
 
 	*s = Size(size)
 	return nil
+}
+
+type FileMode uint32
+
+func (m *FileMode) UnmarshalText(text []byte) error {
+	// Ignore if there is no value set.
+	if len(text) == 0 {
+		return nil
+	}
+
+	if text[0] != '0' {
+		return errors.New("the first character of an octal must be zero")
+	}
+	mode, err := strconv.ParseUint(string(text[1:]), 8, 32)
+	if err != nil {
+		return err
+	}
+	*m = FileMode(mode)
+	return nil
+}
+
+func (m FileMode) MarshalText() (text []byte, err error) {
+	if m != 0 {
+		return []byte(fmt.Sprintf("0%03o", m)), nil
+	}
+	return nil, nil
+}
+
+type Group int
+
+func (g *Group) UnmarshalTOML(data interface{}) error {
+	if grpName, ok := data.(string); ok {
+		group, err := user.LookupGroup(grpName)
+		if err != nil {
+			return err
+		}
+
+		gid, err := strconv.Atoi(group.Gid)
+		if err != nil {
+			return err
+		}
+		*g = Group(gid)
+		return nil
+	} else if gid, ok := data.(int64); ok {
+		*g = Group(gid)
+		return nil
+	}
+	return errors.New("group must be a name (string) or id (int)")
 }
