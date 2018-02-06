@@ -17,8 +17,8 @@ pipeline {
         cp -a $WORKSPACE /go/src/github.com/influxdata/influxdb
 
         cd /go/src/github.com/influxdata/influxdb
-        go get github.com/sparrc/gdm
-        gdm restore
+        go get github.com/golang/dep/...
+        dep ensure -vendor-only
         """
 
         sh """
@@ -41,8 +41,8 @@ pipeline {
         cp -a $WORKSPACE /go/src/github.com/influxdata/influxdb
 
         cd /go/src/github.com/influxdata/influxdb
-        go get github.com/sparrc/gdm
-        gdm restore
+        go get github.com/golang/dep/...
+        dep ensure -vendor-only
         """
 
         sh """

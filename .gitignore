@@ -74,3 +74,6 @@ man/*.1.gz
 
 # test outputs
 /test-results.xml
+
+# vendored files
+/vendor
