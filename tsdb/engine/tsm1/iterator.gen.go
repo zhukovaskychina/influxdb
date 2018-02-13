@@ -348,11 +348,16 @@ func (itr *floatLimitIterator) Next() (*query.FloatPoint, error) {
 	return p, nil
 }
 
-type floatMergeFunc func([]float64, []float64)
+type float64Time struct {
+	Value float64
+	Time  int64
+}
+
+type floatMergeFunc func([]float64Time, []float64Time)
 
 type floatMergeIterator struct {
 	merge  floatMergeFunc
-	buffer []float64
+	buffer []float64Time
 	pool   *buffer.Pool
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -362,15 +367,16 @@ type floatMergeIterator struct {
 	err    error
 }
 
-func (itr *floatMergeIterator) Add(ctx context.Context, fn func([]float64) error) {
+func (itr *floatMergeIterator) Add(ctx context.Context, fn func([]float64Time) error) {
 	buf, ok := itr.pool.Get(ctx)
 	if !ok {
 		return
 	}
 
-	buffer := buf.([]float64)
+	buffer := buf.([]float64Time)
 	for i := range buffer {
-		buffer[i] = 0
+		buffer[i].Value = 0
+		buffer[i].Time = query.ZeroTime
 	}
 
 	itr.wg.Add(1)
@@ -396,19 +402,23 @@ func (itr *floatMergeIterator) Next() (*query.FloatPoint, error) {
 		if itr.err != nil {
 			return nil, itr.err
 		}
-	}
-
-	if len(itr.buffer) == 0 {
-		return nil, nil
-	}
-	itr.point.Value = itr.buffer[0]
-	if itr.init {
-		_, itr.point.Time = itr.opt.Window(itr.point.Time)
-	} else {
 		itr.init = true
 	}
-	itr.buffer = itr.buffer[1:]
-	return &itr.point, nil
+
+	for {
+		if len(itr.buffer) == 0 {
+			return nil, nil
+		}
+
+		p := itr.buffer[0]
+		itr.buffer = itr.buffer[1:]
+		if p.Time == query.ZeroTime {
+			continue
+		}
+		itr.point.Value = p.Value
+		itr.point.Time = p.Time
+		return &itr.point, nil
+	}
 }
 
 func (itr *floatMergeIterator) Close() error {
@@ -660,7 +670,7 @@ func (c *floatDescendingCursor) nextTSM() {
 	}
 }
 
-func floatCount(itr query.FloatIterator, x []int64, opt query.IteratorOptions) error {
+func floatCount(itr query.FloatIterator, x []int64Time, opt query.IteratorOptions) error {
 	start, end := opt.Window(opt.StartTime)
 	for i := 0; ; {
 		p, err := itr.Next()
@@ -677,11 +687,12 @@ func floatCount(itr query.FloatIterator, x []int64, opt query.IteratorOptions) e
 		for p.Time > end {
 			i++
 			if i >= len(x) {
-				return itr.Close()
+				return nil
 			}
 			start, end = opt.Window(end)
 		}
-		x[i]++
+		x[i].Value++
+		x[i].Time = start
 	}
 }
 
@@ -908,11 +919,16 @@ func (itr *integerLimitIterator) Next() (*query.IntegerPoint, error) {
 	return p, nil
 }
 
-type integerMergeFunc func([]int64, []int64)
+type int64Time struct {
+	Value int64
+	Time  int64
+}
+
+type integerMergeFunc func([]int64Time, []int64Time)
 
 type integerMergeIterator struct {
 	merge  integerMergeFunc
-	buffer []int64
+	buffer []int64Time
 	pool   *buffer.Pool
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -922,15 +938,16 @@ type integerMergeIterator struct {
 	err    error
 }
 
-func (itr *integerMergeIterator) Add(ctx context.Context, fn func([]int64) error) {
+func (itr *integerMergeIterator) Add(ctx context.Context, fn func([]int64Time) error) {
 	buf, ok := itr.pool.Get(ctx)
 	if !ok {
 		return
 	}
 
-	buffer := buf.([]int64)
+	buffer := buf.([]int64Time)
 	for i := range buffer {
-		buffer[i] = 0
+		buffer[i].Value = 0
+		buffer[i].Time = query.ZeroTime
 	}
 
 	itr.wg.Add(1)
@@ -956,19 +973,23 @@ func (itr *integerMergeIterator) Next() (*query.IntegerPoint, error) {
 		if itr.err != nil {
 			return nil, itr.err
 		}
-	}
-
-	if len(itr.buffer) == 0 {
-		return nil, nil
-	}
-	itr.point.Value = itr.buffer[0]
-	if itr.init {
-		_, itr.point.Time = itr.opt.Window(itr.point.Time)
-	} else {
 		itr.init = true
 	}
-	itr.buffer = itr.buffer[1:]
-	return &itr.point, nil
+
+	for {
+		if len(itr.buffer) == 0 {
+			return nil, nil
+		}
+
+		p := itr.buffer[0]
+		itr.buffer = itr.buffer[1:]
+		if p.Time == query.ZeroTime {
+			continue
+		}
+		itr.point.Value = p.Value
+		itr.point.Time = p.Time
+		return &itr.point, nil
+	}
 }
 
 func (itr *integerMergeIterator) Close() error {
@@ -1220,7 +1241,7 @@ func (c *integerDescendingCursor) nextTSM() {
 	}
 }
 
-func integerCount(itr query.IntegerIterator, x []int64, opt query.IteratorOptions) error {
+func integerCount(itr query.IntegerIterator, x []int64Time, opt query.IteratorOptions) error {
 	start, end := opt.Window(opt.StartTime)
 	for i := 0; ; {
 		p, err := itr.Next()
@@ -1237,11 +1258,12 @@ func integerCount(itr query.IntegerIterator, x []int64, opt query.IteratorOption
 		for p.Time > end {
 			i++
 			if i >= len(x) {
-				return itr.Close()
+				return nil
 			}
 			start, end = opt.Window(end)
 		}
-		x[i]++
+		x[i].Value++
+		x[i].Time = start
 	}
 }
 
@@ -1468,11 +1490,16 @@ func (itr *unsignedLimitIterator) Next() (*query.UnsignedPoint, error) {
 	return p, nil
 }
 
-type unsignedMergeFunc func([]uint64, []uint64)
+type uint64Time struct {
+	Value uint64
+	Time  int64
+}
+
+type unsignedMergeFunc func([]uint64Time, []uint64Time)
 
 type unsignedMergeIterator struct {
 	merge  unsignedMergeFunc
-	buffer []uint64
+	buffer []uint64Time
 	pool   *buffer.Pool
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -1482,15 +1509,16 @@ type unsignedMergeIterator struct {
 	err    error
 }
 
-func (itr *unsignedMergeIterator) Add(ctx context.Context, fn func([]uint64) error) {
+func (itr *unsignedMergeIterator) Add(ctx context.Context, fn func([]uint64Time) error) {
 	buf, ok := itr.pool.Get(ctx)
 	if !ok {
 		return
 	}
 
-	buffer := buf.([]uint64)
+	buffer := buf.([]uint64Time)
 	for i := range buffer {
-		buffer[i] = 0
+		buffer[i].Value = 0
+		buffer[i].Time = query.ZeroTime
 	}
 
 	itr.wg.Add(1)
@@ -1516,19 +1544,23 @@ func (itr *unsignedMergeIterator) Next() (*query.UnsignedPoint, error) {
 		if itr.err != nil {
 			return nil, itr.err
 		}
-	}
-
-	if len(itr.buffer) == 0 {
-		return nil, nil
-	}
-	itr.point.Value = itr.buffer[0]
-	if itr.init {
-		_, itr.point.Time = itr.opt.Window(itr.point.Time)
-	} else {
 		itr.init = true
 	}
-	itr.buffer = itr.buffer[1:]
-	return &itr.point, nil
+
+	for {
+		if len(itr.buffer) == 0 {
+			return nil, nil
+		}
+
+		p := itr.buffer[0]
+		itr.buffer = itr.buffer[1:]
+		if p.Time == query.ZeroTime {
+			continue
+		}
+		itr.point.Value = p.Value
+		itr.point.Time = p.Time
+		return &itr.point, nil
+	}
 }
 
 func (itr *unsignedMergeIterator) Close() error {
@@ -1780,7 +1812,7 @@ func (c *unsignedDescendingCursor) nextTSM() {
 	}
 }
 
-func unsignedCount(itr query.UnsignedIterator, x []int64, opt query.IteratorOptions) error {
+func unsignedCount(itr query.UnsignedIterator, x []int64Time, opt query.IteratorOptions) error {
 	start, end := opt.Window(opt.StartTime)
 	for i := 0; ; {
 		p, err := itr.Next()
@@ -1797,11 +1829,12 @@ func unsignedCount(itr query.UnsignedIterator, x []int64, opt query.IteratorOpti
 		for p.Time > end {
 			i++
 			if i >= len(x) {
-				return itr.Close()
+				return nil
 			}
 			start, end = opt.Window(end)
 		}
-		x[i]++
+		x[i].Value++
+		x[i].Time = start
 	}
 }
 
@@ -2028,11 +2061,16 @@ func (itr *stringLimitIterator) Next() (*query.StringPoint, error) {
 	return p, nil
 }
 
-type stringMergeFunc func([]string, []string)
+type stringTime struct {
+	Value string
+	Time  int64
+}
+
+type stringMergeFunc func([]stringTime, []stringTime)
 
 type stringMergeIterator struct {
 	merge  stringMergeFunc
-	buffer []string
+	buffer []stringTime
 	pool   *buffer.Pool
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -2042,15 +2080,16 @@ type stringMergeIterator struct {
 	err    error
 }
 
-func (itr *stringMergeIterator) Add(ctx context.Context, fn func([]string) error) {
+func (itr *stringMergeIterator) Add(ctx context.Context, fn func([]stringTime) error) {
 	buf, ok := itr.pool.Get(ctx)
 	if !ok {
 		return
 	}
 
-	buffer := buf.([]string)
+	buffer := buf.([]stringTime)
 	for i := range buffer {
-		buffer[i] = ""
+		buffer[i].Value = ""
+		buffer[i].Time = query.ZeroTime
 	}
 
 	itr.wg.Add(1)
@@ -2076,19 +2115,23 @@ func (itr *stringMergeIterator) Next() (*query.StringPoint, error) {
 		if itr.err != nil {
 			return nil, itr.err
 		}
-	}
-
-	if len(itr.buffer) == 0 {
-		return nil, nil
-	}
-	itr.point.Value = itr.buffer[0]
-	if itr.init {
-		_, itr.point.Time = itr.opt.Window(itr.point.Time)
-	} else {
 		itr.init = true
 	}
-	itr.buffer = itr.buffer[1:]
-	return &itr.point, nil
+
+	for {
+		if len(itr.buffer) == 0 {
+			return nil, nil
+		}
+
+		p := itr.buffer[0]
+		itr.buffer = itr.buffer[1:]
+		if p.Time == query.ZeroTime {
+			continue
+		}
+		itr.point.Value = p.Value
+		itr.point.Time = p.Time
+		return &itr.point, nil
+	}
 }
 
 func (itr *stringMergeIterator) Close() error {
@@ -2340,7 +2383,7 @@ func (c *stringDescendingCursor) nextTSM() {
 	}
 }
 
-func stringCount(itr query.StringIterator, x []int64, opt query.IteratorOptions) error {
+func stringCount(itr query.StringIterator, x []int64Time, opt query.IteratorOptions) error {
 	start, end := opt.Window(opt.StartTime)
 	for i := 0; ; {
 		p, err := itr.Next()
@@ -2357,11 +2400,12 @@ func stringCount(itr query.StringIterator, x []int64, opt query.IteratorOptions)
 		for p.Time > end {
 			i++
 			if i >= len(x) {
-				return itr.Close()
+				return nil
 			}
 			start, end = opt.Window(end)
 		}
-		x[i]++
+		x[i].Value++
+		x[i].Time = start
 	}
 }
 
@@ -2588,11 +2632,16 @@ func (itr *booleanLimitIterator) Next() (*query.BooleanPoint, error) {
 	return p, nil
 }
 
-type booleanMergeFunc func([]bool, []bool)
+type boolTime struct {
+	Value bool
+	Time  int64
+}
+
+type booleanMergeFunc func([]boolTime, []boolTime)
 
 type booleanMergeIterator struct {
 	merge  booleanMergeFunc
-	buffer []bool
+	buffer []boolTime
 	pool   *buffer.Pool
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -2602,15 +2651,16 @@ type booleanMergeIterator struct {
 	err    error
 }
 
-func (itr *booleanMergeIterator) Add(ctx context.Context, fn func([]bool) error) {
+func (itr *booleanMergeIterator) Add(ctx context.Context, fn func([]boolTime) error) {
 	buf, ok := itr.pool.Get(ctx)
 	if !ok {
 		return
 	}
 
-	buffer := buf.([]bool)
+	buffer := buf.([]boolTime)
 	for i := range buffer {
-		buffer[i] = false
+		buffer[i].Value = false
+		buffer[i].Time = query.ZeroTime
 	}
 
 	itr.wg.Add(1)
@@ -2636,19 +2686,23 @@ func (itr *booleanMergeIterator) Next() (*query.BooleanPoint, error) {
 		if itr.err != nil {
 			return nil, itr.err
 		}
-	}
-
-	if len(itr.buffer) == 0 {
-		return nil, nil
-	}
-	itr.point.Value = itr.buffer[0]
-	if itr.init {
-		_, itr.point.Time = itr.opt.Window(itr.point.Time)
-	} else {
 		itr.init = true
 	}
-	itr.buffer = itr.buffer[1:]
-	return &itr.point, nil
+
+	for {
+		if len(itr.buffer) == 0 {
+			return nil, nil
+		}
+
+		p := itr.buffer[0]
+		itr.buffer = itr.buffer[1:]
+		if p.Time == query.ZeroTime {
+			continue
+		}
+		itr.point.Value = p.Value
+		itr.point.Time = p.Time
+		return &itr.point, nil
+	}
 }
 
 func (itr *booleanMergeIterator) Close() error {
@@ -2900,7 +2954,7 @@ func (c *booleanDescendingCursor) nextTSM() {
 	}
 }
 
-func booleanCount(itr query.BooleanIterator, x []int64, opt query.IteratorOptions) error {
+func booleanCount(itr query.BooleanIterator, x []int64Time, opt query.IteratorOptions) error {
 	start, end := opt.Window(opt.StartTime)
 	for i := 0; ; {
 		p, err := itr.Next()
@@ -2917,11 +2971,12 @@ func booleanCount(itr query.BooleanIterator, x []int64, opt query.IteratorOption
 		for p.Time > end {
 			i++
 			if i >= len(x) {
-				return itr.Close()
+				return nil
 			}
 			start, end = opt.Window(end)
 		}
-		x[i]++
+		x[i].Value++
+		x[i].Time = start
 	}
 }
 
