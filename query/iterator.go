@@ -576,6 +576,23 @@ func (a *auxIteratorFields) sendError(err error) {
 	}
 }
 
+type ConcatIterator interface {
+	Iterator
+	Add(ctx context.Context, itr Iterator) error
+	Done()
+}
+
+func NewConcatIterator(sz int, typ influxql.DataType) ConcatIterator {
+	switch typ {
+	case influxql.Float:
+		return newFloatConcatIterator(sz)
+	case influxql.Integer:
+		return newIntegerConcatIterator(sz)
+	default:
+		panic(fmt.Sprintf("unsupported concat iterator type: %s", typ))
+	}
+}
+
 // DrainIterator reads and discards all points from itr.
 func DrainIterator(itr Iterator) {
 	defer itr.Close()
