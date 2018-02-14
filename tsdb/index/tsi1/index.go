@@ -49,7 +49,7 @@ func init() {
 // NOTE: Currently, this must not be change once a database is created. Further,
 // it must also be a power of 2.
 //
-var DefaultPartitionN uint64 = 8
+var DefaultPartitionN uint64 = 1
 
 // An IndexOption is a functional option for changing the configuration of
 // an Index.
@@ -507,45 +507,47 @@ func (i *Index) CreateSeriesListIfNotExists(keys [][]byte, names [][]byte, tagsS
 	if len(names) != len(tagsSlice) {
 		return errors.New("names/tags length mismatch in index")
 	}
+	return i.partitions[0].createSeriesListIfNotExists(names, tagsSlice)
+	/*
+		// We need to move different series into collections for each partition
+		// to process.
+		pNames := make([][][]byte, i.PartitionN)
+		pTags := make([][]models.Tags, i.PartitionN)
 
-	// We need to move different series into collections for each partition
-	// to process.
-	pNames := make([][][]byte, i.PartitionN)
-	pTags := make([][]models.Tags, i.PartitionN)
-
-	// Determine partition for series using each series key.
-	for ki, key := range keys {
-		pidx := i.partitionIdx(key)
-		pNames[pidx] = append(pNames[pidx], names[ki])
-		pTags[pidx] = append(pTags[pidx], tagsSlice[ki])
-	}
-
-	// Process each subset of series on each partition.
-	n := i.availableThreads()
-
-	// Store errors.
-	errC := make(chan error, i.PartitionN)
-
-	var pidx uint32 // Index of maximum Partition being worked on.
-	for k := 0; k < n; k++ {
-		go func() {
-			for {
-				idx := int(atomic.AddUint32(&pidx, 1) - 1) // Get next partition to work on.
-				if idx >= len(i.partitions) {
-					return // No more work.
-				}
-				errC <- i.partitions[idx].createSeriesListIfNotExists(pNames[idx], pTags[idx])
-			}
-		}()
-	}
-
-	// Check for error
-	for i := 0; i < cap(errC); i++ {
-		if err := <-errC; err != nil {
-			return err
+		// Determine partition for series using each series key.
+		for ki, key := range keys {
+			pidx := i.partitionIdx(key)
+			pNames[pidx] = append(pNames[pidx], names[ki])
+			pTags[pidx] = append(pTags[pidx], tagsSlice[ki])
 		}
-	}
-	return nil
+
+		// Process each subset of series on each partition.
+		n := i.availableThreads()
+
+		// Store errors.
+		errC := make(chan error, i.PartitionN)
+
+		var pidx uint32 // Index of maximum Partition being worked on.
+		for k := 0; k < n; k++ {
+			go func() {
+				for {
+					idx := int(atomic.AddUint32(&pidx, 1) - 1) // Get next partition to work on.
+					if idx >= len(i.partitions) {
+						return // No more work.
+					}
+					errC <- i.partitions[idx].createSeriesListIfNotExists(pNames[idx], pTags[idx])
+				}
+			}()
+		}
+
+		// Check for error
+		for i := 0; i < cap(errC); i++ {
+			if err := <-errC; err != nil {
+				return err
+			}
+		}
+		return nil
+	*/
 }
 
 // CreateSeriesIfNotExists creates a series if it doesn't exist or is deleted.
