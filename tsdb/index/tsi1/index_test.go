@@ -308,6 +308,63 @@ func TestIndex_DiskSizeBytes(t *testing.T) {
 	})
 }
 
+func BenchmarkIndex_CreateSeriesListIfNotExists(b *testing.B) {
+	const nameN = 10
+	const tagCardinalityN = 100000
+	const n = nameN * tagCardinalityN
+	const batchSize = 5000
+	if n%batchSize != 0 {
+		b.Fatal("series cannot be split into correct batch sizes")
+	}
+
+	// Generate series data.
+	keys := make([][]byte, 0, n)
+	names := make([][]byte, 0, n)
+	tagsSlice := make([]models.Tags, 0, n)
+	for i := 0; i < nameN; i++ {
+		name := fmt.Sprintf("m%d", i)
+		for j := 0; j < tagCardinalityN; j++ {
+			tags := models.Tags{{Key: []byte("TAG"), Value: []byte(fmt.Sprintf("VALUE%d", j))}}
+
+			keys = append(keys, models.MakeKey([]byte(name), tags))
+			names = append(names, []byte(name))
+			tagsSlice = append(tagsSlice, tags)
+		}
+	}
+
+	// Create series file data so we isolate TSI performance.
+	sfile := NewSeriesFile()
+	if err := sfile.Open(); err != nil {
+		b.Fatal(err)
+	}
+	defer sfile.Close()
+
+	insert := func() {
+		idx := NewIndex(tsi1.DefaultPartitionN)
+		idx.SeriesFile = sfile
+		if err := idx.Index.Open(); err != nil {
+			b.Fatal(err)
+		}
+		defer idx.Close()
+
+		for j := 0; j < n; j += batchSize {
+			if err := idx.CreateSeriesListIfNotExists(keys[j:j+batchSize], names[j:j+batchSize], tagsSlice[j:j+batchSize]); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	// Run once to populate the series file.
+	insert()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		insert()
+	}
+}
+
 // Index is a test wrapper for tsi1.Index.
 type Index struct {
 	*tsi1.Index
