@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor/diagnostics"
 	"github.com/influxdata/influxdb/services/meta"
@@ -149,7 +150,7 @@ func (m *Monitor) writePoints(p models.Points) error {
 	defer m.mu.RUnlock()
 
 	if err := m.PointsWriter.WritePoints(m.storeDatabase, m.storeRetentionPolicy, p); err != nil {
-		m.Logger.Info(fmt.Sprintf("failed to store statistics: %s", err))
+		m.Logger.Info("failed to store statistics", zap.Error(err))
 	}
 	return nil
 }
@@ -389,8 +390,7 @@ func (m *Monitor) createInternalStorage() {
 		}
 
 		if _, err := m.MetaClient.CreateDatabaseWithRetentionPolicy(m.storeDatabase, &spec); err != nil {
-			m.Logger.Info(fmt.Sprintf("failed to create database '%s', failed to create storage: %s",
-				m.storeDatabase, err.Error()))
+			m.Logger.Info("failed to create database", logger.Database(m.storeDatabase), zap.Error(err))
 			return
 		}
 	}

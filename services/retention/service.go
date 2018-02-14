@@ -2,10 +2,10 @@
 package retention // import "github.com/influxdata/influxdb/services/retention"
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/services/meta"
 	"go.uber.org/zap"
 )
@@ -43,7 +43,7 @@ func (s *Service) Open() error {
 		return nil
 	}
 
-	s.logger.Info("Starting retention policy enforcement service", zap.String("check-interval", s.config.CheckInterval.String()))
+	s.logger.Info("Starting retention policy enforcement service", zap.Duration("check-interval", time.Duration(s.config.CheckInterval)))
 	s.done = make(chan struct{})
 
 	s.wg.Add(1)
@@ -79,7 +79,9 @@ func (s *Service) run() {
 			return
 
 		case <-ticker.C:
-			s.logger.Info("Retention policy shard deletion check commencing.")
+			log := logger.NewOperation(s.logger, "retention.delete_check")
+			log.Info(logger.TraceS+"beginning retention policy deletion check", logger.OperationEventStart())
+			startTime := time.Now()
 
 			type deletionInfo struct {
 				db string
@@ -92,11 +94,11 @@ func (s *Service) run() {
 				for _, r := range d.RetentionPolicies {
 					for _, g := range r.ExpiredShardGroups(time.Now().UTC()) {
 						if err := s.MetaClient.DeleteShardGroup(d.Name, r.Name, g.ID); err != nil {
-							s.logger.Info(fmt.Sprintf("Failed to delete shard group %d from database %s, retention policy %s: %v. Retry in %v.", g.ID, d.Name, r.Name, err, s.config.CheckInterval))
+							log.Info("failed to delete shard group", zap.Error(err), logger.Database(d.Name), logger.ShardGroup(g.ID), logger.RetentionPolicy(r.Name))
 							continue
 						}
 
-						s.logger.Info(fmt.Sprintf("Deleted shard group %d from database %s, retention policy %s.", g.ID, d.Name, r.Name))
+						log.Info("shard group deleted", logger.Database(d.Name), logger.ShardGroup(g.ID), logger.RetentionPolicy(r.Name))
 
 						// Store all the shard IDs that may possibly need to be removed locally.
 						for _, sh := range g.Shards {
@@ -110,16 +112,18 @@ func (s *Service) run() {
 			for _, id := range s.TSDBStore.ShardIDs() {
 				if info, ok := deletedShardIDs[id]; ok {
 					if err := s.TSDBStore.DeleteShard(id); err != nil {
-						s.logger.Error(fmt.Sprintf("Failed to delete shard ID %d from database %s, retention policy %s: %v. Will retry in %v", id, info.db, info.rp, err, s.config.CheckInterval))
+						log.Info("failed to delete shard", zap.Error(err), logger.Database(info.db), logger.Shard(id), logger.RetentionPolicy(info.rp))
 						continue
 					}
-					s.logger.Info(fmt.Sprintf("Shard ID %d from database %s, retention policy %s, deleted.", id, info.db, info.rp))
+					log.Info("shard deleted", logger.Database(info.db), logger.Shard(id), logger.RetentionPolicy(info.rp))
 				}
 			}
 
 			if err := s.MetaClient.PruneShardGroups(); err != nil {
-				s.logger.Info(fmt.Sprintf("Problem pruning shard groups: %s. Will retry in %v", err, s.config.CheckInterval))
+				s.logger.Info("failed to prune shard groups", zap.Error(err))
 			}
+
+			log.Info(logger.TraceE+"completed retention policy deletion check", logger.OperationEventEnd(), logger.OperationElapsed(time.Since(startTime)))
 		}
 	}
 }

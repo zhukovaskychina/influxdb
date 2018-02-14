@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/pkg/estimator/hll"
 
 	"github.com/influxdata/influxdb/models"
@@ -144,7 +145,7 @@ func (s *Store) Open() error {
 	s.closing = make(chan struct{})
 	s.shards = map[uint64]*Shard{}
 
-	s.Logger.Info(fmt.Sprintf("Using data dir: %v", s.Path()))
+	s.Logger.Info("Open store", zap.String("path", s.Path()))
 
 	// Create directory.
 	if err := os.MkdirAll(s.path, 0777); err != nil {
@@ -198,6 +199,10 @@ func (s *Store) loadShards() error {
 		s.Logger.Info("Compaction throughput limit disabled")
 	}
 
+	log := logger.NewOperation(s.Logger, "tsdb.open")
+	log.Info(logger.TraceS+"started opening store", zap.String("path", s.path), logger.OperationEventStart())
+	defer log.Info(logger.TraceE+"ended opening store", logger.OperationEventEnd())
+
 	t := limiter.NewFixed(runtime.GOMAXPROCS(0))
 	resC := make(chan *res)
 	var n int
@@ -209,8 +214,9 @@ func (s *Store) loadShards() error {
 	}
 
 	for _, db := range dbDirs {
+		dbPath := filepath.Join(s.path, db.Name())
 		if !db.IsDir() {
-			s.Logger.Info("Not loading. Not a database directory.", zap.String("name", db.Name()))
+			log.Info("Not loading. Not a database directory.", zap.String("path", dbPath))
 			continue
 		}
 
@@ -227,14 +233,15 @@ func (s *Store) loadShards() error {
 		}
 
 		// Load each retention policy within the database directory.
-		rpDirs, err := ioutil.ReadDir(filepath.Join(s.path, db.Name()))
+		rpDirs, err := ioutil.ReadDir(dbPath)
 		if err != nil {
 			return err
 		}
 
 		for _, rp := range rpDirs {
+			rpPath := filepath.Join(s.path, db.Name(), rp.Name())
 			if !rp.IsDir() {
-				s.Logger.Info(fmt.Sprintf("Skipping retention policy dir: %s. Not a directory", rp.Name()))
+				log.Info("Skipping retention policy path, not a directory", zap.String("path", rpPath))
 				continue
 			}
 
@@ -243,7 +250,7 @@ func (s *Store) loadShards() error {
 				continue
 			}
 
-			shardDirs, err := ioutil.ReadDir(filepath.Join(s.path, db.Name(), rp.Name()))
+			shardDirs, err := ioutil.ReadDir(rpPath)
 			if err != nil {
 				return err
 			}
@@ -261,6 +268,7 @@ func (s *Store) loadShards() error {
 					// Shard file names are numeric shardIDs
 					shardID, err := strconv.ParseUint(sh, 10, 64)
 					if err != nil {
+						log.Info("invalid shard ID found at path", zap.String("path", path))
 						resC <- &res{err: fmt.Errorf("%s is not a valid ID. Skipping shard.", sh)}
 						return
 					}
@@ -286,12 +294,13 @@ func (s *Store) loadShards() error {
 
 					err = shard.Open()
 					if err != nil {
+						log.Info("failed to open shard", logger.Shard(shardID), zap.Error(err))
 						resC <- &res{err: fmt.Errorf("Failed to open shard: %d: %s", shardID, err)}
 						return
 					}
 
 					resC <- &res{s: shard}
-					s.Logger.Info(fmt.Sprintf("%s opened in %s", path, time.Since(start)))
+					log.Info(fmt.Sprintf("%s opened in %s", path, time.Since(start)), zap.String("path", path), zap.Duration("duration", time.Since(start)))
 				}(db.Name(), rp.Name(), sh.Name())
 			}
 		}
@@ -302,7 +311,6 @@ func (s *Store) loadShards() error {
 	for i := 0; i < n; i++ {
 		res := <-resC
 		if res.err != nil {
-			s.Logger.Info(res.err.Error())
 			continue
 		}
 		s.shards[res.s.id] = res.s

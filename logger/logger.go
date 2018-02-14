@@ -11,6 +11,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Prefixes for log messages that start and end a trace
+const (
+	TraceS = "TRACE->S: "
+	TraceE = "TRACE->E: "
+)
+
 func New(w io.Writer) *zap.Logger {
 	config := NewConfig()
 	l, _ := config.New(w)
@@ -78,4 +84,14 @@ func isTerminal(w io.Writer) bool {
 		return isatty.IsTerminal(f.Fd())
 	}
 	return false
+}
+
+
+func NewOperation(log *zap.Logger, name string, fields ...zapcore.Field) *zap.Logger {
+	f := []zapcore.Field{TraceID(NextTraceID()), OperationName(name)}
+	if len(fields) > 0 {
+		f = append(f, fields...)
+	}
+
+	return log.With(f...)
 }

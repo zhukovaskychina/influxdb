@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/bytesutil"
 	"github.com/influxdata/influxdb/pkg/estimator"
@@ -1558,10 +1559,15 @@ func (e *Engine) WriteSnapshot() error {
 
 	var started *time.Time
 
+	log := logger.NewOperation(e.logger, "cache.snapshot")
+	log.Info(logger.TraceS+"beginning cache snapshot")
+
 	defer func() {
 		if started != nil {
-			e.Cache.UpdateCompactTime(time.Since(*started))
-			e.logger.Info(fmt.Sprintf("Snapshot for path %s written in %v", e.path, time.Since(*started)))
+			elapsed := time.Since(*started)
+			e.Cache.UpdateCompactTime(elapsed)
+			e.logger.Info(fmt.Sprintf("Snapshot for path %s written in %v", e.path, elapsed))
+			log.Info(logger.TraceE+"completed cache snapshot", logger.OperationEventEnd(), logger.OperationElapsed(elapsed))
 		}
 	}()
 
@@ -1605,7 +1611,7 @@ func (e *Engine) WriteSnapshot() error {
 	snapshot.Deduplicate()
 	e.traceLogger.Info(fmt.Sprintf("Snapshot for path %s deduplicated in %v", e.path, time.Since(dedup)))
 
-	return e.writeSnapshotAndCommit(closedFiles, snapshot)
+	return e.writeSnapshotAndCommit(log, closedFiles, snapshot)
 }
 
 // CreateSnapshot will create a temp directory that holds
@@ -1627,7 +1633,7 @@ func (e *Engine) CreateSnapshot() (string, error) {
 }
 
 // writeSnapshotAndCommit will write the passed cache to a new TSM file and remove the closed WAL segments.
-func (e *Engine) writeSnapshotAndCommit(closedFiles []string, snapshot *Cache) (err error) {
+func (e *Engine) writeSnapshotAndCommit(log *zap.Logger, closedFiles []string, snapshot *Cache) (err error) {
 	defer func() {
 		if err != nil {
 			e.Cache.ClearSnapshot(false)
@@ -1637,7 +1643,7 @@ func (e *Engine) writeSnapshotAndCommit(closedFiles []string, snapshot *Cache) (
 	// write the new snapshot files
 	newFiles, err := e.Compactor.WriteSnapshot(snapshot)
 	if err != nil {
-		e.logger.Info(fmt.Sprintf("error writing snapshot from compactor: %v", err))
+		log.Info(fmt.Sprintf("error writing snapshot from compactor: %v", err))
 		return err
 	}
 
@@ -1645,8 +1651,8 @@ func (e *Engine) writeSnapshotAndCommit(closedFiles []string, snapshot *Cache) (
 	defer e.mu.RUnlock()
 
 	// update the file store with these new files
-	if err := e.FileStore.Replace(nil, newFiles); err != nil {
-		e.logger.Info(fmt.Sprintf("error adding new TSM files from snapshot: %v", err))
+	if err = e.FileStore.Replace(nil, newFiles); err != nil {
+		log.Info(fmt.Sprintf("error adding new TSM files from snapshot: %v", err))
 		return err
 	}
 
@@ -1654,7 +1660,7 @@ func (e *Engine) writeSnapshotAndCommit(closedFiles []string, snapshot *Cache) (
 	e.Cache.ClearSnapshot(true)
 
 	if err := e.WAL.Remove(closedFiles); err != nil {
-		e.logger.Info(fmt.Sprintf("error removing closed wal segments: %v", err))
+		log.Info(fmt.Sprintf("error removing closed wal segments: %v", err))
 	}
 
 	return nil
@@ -1908,9 +1914,14 @@ func (s *compactionStrategy) Apply() {
 func (s *compactionStrategy) compactGroup() {
 	group := s.group
 	start := time.Now()
-	s.logger.Info(fmt.Sprintf("beginning %s compaction, %d TSM files", s.description, len(group)))
+	log := logger.NewOperation(s.logger, "compaction.compact_group")
+	log.Info(logger.TraceS+"started compaction", logger.OperationEventStart())
+	defer log.Info(logger.TraceE+"ended compaction", logger.OperationEventEnd())
+
+	log.Info(fmt.Sprintf("beginning %s compaction, %d TSM files", s.description, len(group)))
+
 	for i, f := range group {
-		s.logger.Info(fmt.Sprintf("compacting %s %s (#%d)", s.description, f, i))
+		log.Info(fmt.Sprintf("compacting %s %s (#%d)", s.description, f, i))
 	}
 
 	var (
@@ -1927,7 +1938,7 @@ func (s *compactionStrategy) compactGroup() {
 	if err != nil {
 		_, inProgress := err.(errCompactionInProgress)
 		if err == errCompactionsDisabled || inProgress {
-			s.logger.Info(fmt.Sprintf("aborted %s compaction. %v", s.description, err))
+			log.Info(fmt.Sprintf("aborted %s compaction. %v", s.description, err))
 
 			if _, ok := err.(errCompactionInProgress); ok {
 				time.Sleep(time.Second)
@@ -1935,39 +1946,40 @@ func (s *compactionStrategy) compactGroup() {
 			return
 		}
 
-		s.logger.Info(fmt.Sprintf("error compacting TSM files: %v", err))
+		log.Info(fmt.Sprintf("error compacting TSM files: %v", err))
 		atomic.AddInt64(s.errorStat, 1)
 		time.Sleep(time.Second)
 		return
 	}
 
 	if err := s.fileStore.ReplaceWithCallback(group, files, nil); err != nil {
-		s.logger.Info(fmt.Sprintf("error replacing new TSM files: %v", err))
+		log.Info(fmt.Sprintf("error replacing new TSM files: %v", err))
 		atomic.AddInt64(s.errorStat, 1)
 		time.Sleep(time.Second)
 		return
 	}
 
 	for i, f := range files {
-		s.logger.Info(fmt.Sprintf("compacted %s into %s (#%d)", s.description, f, i))
+		log.Info(fmt.Sprintf("compacted %s into %s (#%d)", s.description, f, i))
 	}
-	s.logger.Info(fmt.Sprintf("compacted %s %d files into %d files in %s", s.description, len(group), len(files), time.Since(start)))
+	log.Info(fmt.Sprintf("compacted %s %d files into %d files in %s", s.description, len(group), len(files), time.Since(start)))
 	atomic.AddInt64(s.successStat, 1)
 }
 
 // levelCompactionStrategy returns a compactionStrategy for the given level.
 // It returns nil if there are no TSM files to compact.
 func (e *Engine) levelCompactionStrategy(group CompactionGroup, fast bool, level int) *compactionStrategy {
+	desc := fmt.Sprintf("level %d", level)
 	return &compactionStrategy{
 		group:     group,
-		logger:    e.logger,
+		logger:    e.logger.With(zap.String("compaction_desc", desc)),
 		fileStore: e.FileStore,
 		compactor: e.Compactor,
 		fast:      fast,
 		engine:    e,
 		level:     level,
 
-		description:  fmt.Sprintf("level %d", level),
+		description:  desc,
 		activeStat:   &e.stats.TSMCompactionsActive[level-1],
 		successStat:  &e.stats.TSMCompactions[level-1],
 		errorStat:    &e.stats.TSMCompactionErrors[level-1],
@@ -1980,7 +1992,6 @@ func (e *Engine) levelCompactionStrategy(group CompactionGroup, fast bool, level
 func (e *Engine) fullCompactionStrategy(group CompactionGroup, optimize bool) *compactionStrategy {
 	s := &compactionStrategy{
 		group:     group,
-		logger:    e.logger,
 		fileStore: e.FileStore,
 		compactor: e.Compactor,
 		fast:      optimize,
@@ -2001,6 +2012,8 @@ func (e *Engine) fullCompactionStrategy(group CompactionGroup, optimize bool) *c
 		s.errorStat = &e.stats.TSMFullCompactionErrors
 		s.durationStat = &e.stats.TSMFullCompactionDuration
 	}
+
+	s.logger = e.logger.With(zap.String("compaction_desc", s.description))
 
 	return s
 }

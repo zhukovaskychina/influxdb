@@ -117,6 +117,10 @@ type Handler struct {
 
 // NewHandler returns a new instance of handler with routes.
 func NewHandler(c Config) *Handler {
+	if c.AccessLogPath != "" {
+
+	}
+
 	h := &Handler{
 		mux:            pat.New(),
 		Config:         &c,
@@ -179,6 +183,8 @@ func NewHandler(c Config) *Handler {
 
 	return h
 }
+
+func (h *Handler) Open() error { return nil }
 
 // Statistics maintains statistics for the httpd service.
 type Statistics struct {
